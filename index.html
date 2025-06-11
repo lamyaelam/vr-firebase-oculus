@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Surveillance VR Panneaux</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #eef2f7;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+
+  <!-- ✅ BabylonJS core + loader -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+
+  <!-- ✅ Firebase compat (async injection dans le code JS plus bas) -->
+
+  <!-- ✅ Script principal -->
+  <script>
+    const canvas = document.getElementById("renderCanvas");
+    const engine = new BABYLON.Engine(canvas, true);
+    let scene;
+
+    // 🔧 Chargement Firebase async
+    if (!window.firebase) {
+      const s1 = document.createElement("script");
+      s1.src = "https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js";
+      document.head.appendChild(s1);
+
+      const s2 = document.createElement("script");
+      s2.src = "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js";
+      document.head.appendChild(s2);
+    }
+
+    function waitForFirebaseInit() {
+      return new Promise((resolve) => {
+        const check = () => {
+          if (window.firebase?.initializeApp && window.firebase?.firestore) {
+            const config = {
+              apiKey: "AIzaSyDyxGQOvCLnt1YJLVtPCpEOv-urHd3Sl2k",
+              authDomain: "db25-c998e.firebaseapp.com",
+              projectId: "db25-c998e",
+              storageBucket: "db25-c998e.appspot.com",
+              messagingSenderId: "161418953312",
+              appId: "1:161418953312:web:9e9351d07c3c3aca8f7905",
+              measurementId: "G-6WE1P5T25G"
+            };
+            firebase.initializeApp(config);
+            resolve(firebase.firestore());
+          } else setTimeout(check, 200);
+        };
+        check();
+      });
+    }
+
+    async function createScene() {
+      const db = await waitForFirebaseInit();
+
+      scene = new BABYLON.Scene(engine);
+      scene.clearColor = new BABYLON.Color4(0.95, 0.97, 1, 1);
+
+      const camera = new BABYLON.ArcRotateCamera("Camera", Math.PI / 2, Math.PI / 2.5, 50, BABYLON.Vector3.Zero(), scene);
+      camera.attachControl(canvas, true);
+
+      const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+      light.intensity = 1.2;
+
+      const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
+      ground.position.y = -5;
+
+      const modelUrl = "https://cdn.glitch.global/57378bc8-72c4-49e1-822f-c2fd14d19f7e/glb3%20(2).glb?v=1749544812204";
+      await BABYLON.SceneLoader.AppendAsync(modelUrl, "", scene);
+
+      const infoBox = document.createElement("div");
+      Object.assign(infoBox.style, {
+        position: "absolute",
+        background: "#111",
+        color: "white",
+        padding: "10px 15px",
+        borderRadius: "10px",
+        border: "2px solid #ff00ff",
+        fontSize: "14px",
+        display: "none",
+        pointerEvents: "none",
+        zIndex: 9999,
+        fontFamily: "sans-serif"
+      });
+      document.body.appendChild(infoBox);
+      let timeout;
+
+      const cleanId = (name) => name.replace(/_primitive\d+$/, "").trim();
+
+      scene.onPointerDown = async (evt, pickResult) => {
+        if (!pickResult.hit || !pickResult.pickedMesh) return;
+        const rawId = pickResult.pickedMesh.name;
+        const id = cleanId(rawId);
+        const x = evt.clientX + 10;
+        const y = evt.clientY + 10;
+
+        let content = "";
+        try {
+          const panneauDoc = await db.collection("panneaux_solaire").doc(id).get();
+          if (panneauDoc.exists) {
+            const capteurId = panneauDoc.data().capteur_temperature;
+
+            db.collection("capteurs").doc(capteurId).collection("mesure_capteur")
+              .onSnapshot(snapshot => {
+                const last = snapshot.docs[snapshot.docs.length - 1]?.data();
+                const valeur = last?.valeur ?? "?";
+
+                content = `
+                  <strong style="color:#0ff;">Panneau :</strong> ${id}<br>
+                  <strong>ID Capteur :</strong> ${capteurId}<br>
+                  <strong>Température :</strong> ${valeur} °C
+                `;
+                infoBox.style.borderColor = "#0ff";
+                infoBox.innerHTML = content;
+                infoBox.style.left = `${x}px`;
+                infoBox.style.top = `${y}px`;
+                infoBox.style.display = "block";
+              });
+          }
+
+          else if ((await db.collection("onduleur").doc(id).get()).exists) {
+            db.collection("onduleur").doc(id).collection("mesures")
+              .onSnapshot(snapshot => {
+                const last = snapshot.docs[snapshot.docs.length - 1]?.data();
+                const P = last?.P_DC_inv ?? 0;
+                const etat = P > 3000 ? "Bon" : P > 1000 ? "Moyen" : "Faible";
+
+                content = `
+                  <strong style="color:orange;">Onduleur :</strong> ${id}<br>
+                  <strong>État :</strong> ${etat}<br>
+                  <strong>P_DC_inv :</strong> ${P.toFixed(2)} W
+                `;
+                infoBox.style.borderColor = "orange";
+                infoBox.innerHTML = content;
+                infoBox.style.left = `${x}px`;
+                infoBox.style.top = `${y}px`;
+                infoBox.style.display = "block";
+              });
+          }
+
+          else {
+            content = `<span style="color:violet;"><strong>ID :</strong> ${id}</span>`;
+            infoBox.style.borderColor = "violet";
+            infoBox.innerHTML = content;
+            infoBox.style.left = `${x}px`;
+            infoBox.style.top = `${y}px`;
+            infoBox.style.display = "block";
+          }
+
+          clearTimeout(timeout);
+          timeout = setTimeout(() => (infoBox.style.display = "none"), 5000);
+        } catch (err) {
+          console.error("Erreur Firestore :", err);
+        }
+      };
+
+      // WebXR
+      const xr = await scene.createDefaultXRExperienceAsync({ floorMeshes: [ground] });
+
+      const enterVR = document.createElement("button");
+      enterVR.textContent = "Entrer en VR";
+      Object.assign(enterVR.style, {
+        position: "absolute",
+        top: "20px",
+        right: "20px",
+        padding: "10px 15px",
+        background: "#0af",
+        color: "white",
+        border: "none",
+        borderRadius: "8px",
+        cursor: "pointer",
+        zIndex: 9999
+      });
+      enterVR.onclick = async () => {
+        await xr.baseExperience.enterXRAsync("immersive-vr", "local-floor", {
+          optionalFeatures: ["dom-overlay"],
+          domOverlay: { root: document.body }
+        });
+      };
+      document.body.appendChild(enterVR);
+    }
+
+    createScene().then(() => {
+      engine.runRenderLoop(() => {
+        if (scene) scene.render();
+      });
+    });
+
+    window.addEventListener("resize", () => engine.resize());
+  </script>
+</body>
+</html>
