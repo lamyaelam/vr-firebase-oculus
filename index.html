@@ -20,19 +20,14 @@
 <body>
   <canvas id="renderCanvas"></canvas>
 
-  <!-- ✅ BabylonJS core + loader -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
-  <!-- ✅ Firebase compat (async injection dans le code JS plus bas) -->
-
-  <!-- ✅ Script principal -->
   <script>
     const canvas = document.getElementById("renderCanvas");
     const engine = new BABYLON.Engine(canvas, true);
     let scene;
 
-    // 🔧 Chargement Firebase async
     if (!window.firebase) {
       const s1 = document.createElement("script");
       s1.src = "https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js";
@@ -82,95 +77,56 @@
       const modelUrl = "https://files.catbox.moe/0g600z.glb";
       await BABYLON.SceneLoader.AppendAsync(modelUrl, "", scene);
 
-      const infoBox = document.createElement("div");
-      Object.assign(infoBox.style, {
-        position: "absolute",
-        background: "#111",
-        color: "white",
-        padding: "10px 15px",
-        borderRadius: "10px",
-        border: "2px solid #ff00ff",
-        fontSize: "14px",
-        display: "none",
-        pointerEvents: "none",
-        zIndex: 9999,
-        fontFamily: "sans-serif"
-      });
-      document.body.appendChild(infoBox);
-      let timeout;
-
       const cleanId = (name) => name.replace(/_primitive\d+$/, "").trim();
 
-      scene.onPointerDown = async (evt, pickResult) => {
-        if (!pickResult.hit || !pickResult.pickedMesh) return;
-        const rawId = pickResult.pickedMesh.name;
-        const id = cleanId(rawId);
-        const x = evt.clientX + 10;
-        const y = evt.clientY + 10;
-
-        let content = "";
-        try {
-          const panneauDoc = await db.collection("panneaux_solaire").doc(id).get();
-          if (panneauDoc.exists) {
-            const capteurId = panneauDoc.data().capteur_temperature;
-
-            db.collection("capteurs").doc(capteurId).collection("mesure_capteur")
-              .onSnapshot(snapshot => {
-                const last = snapshot.docs[snapshot.docs.length - 1]?.data();
-                const valeur = last?.valeur ?? "?";
-
-                content = `
-                  <strong style="color:#0ff;">Panneau :</strong> ${id}<br>
-                  <strong>ID Capteur :</strong> ${capteurId}<br>
-                  <strong>Température :</strong> ${valeur} °C
-                `;
-                infoBox.style.borderColor = "#0ff";
-                infoBox.innerHTML = content;
-                infoBox.style.left = `${x}px`;
-                infoBox.style.top = `${y}px`;
-                infoBox.style.display = "block";
-              });
-          }
-
-          else if ((await db.collection("onduleur").doc(id).get()).exists) {
-            db.collection("onduleur").doc(id).collection("mesures")
-              .onSnapshot(snapshot => {
-                const last = snapshot.docs[snapshot.docs.length - 1]?.data();
-                const P = last?.P_DC_inv ?? 0;
-                const etat = P > 3000 ? "Bon" : P > 1000 ? "Moyen" : "Faible";
-
-                content = `
-                  <strong style="color:orange;">Onduleur :</strong> ${id}<br>
-                  <strong>État :</strong> ${etat}<br>
-                  <strong>P_DC_inv :</strong> ${P.toFixed(2)} W
-                `;
-                infoBox.style.borderColor = "orange";
-                infoBox.innerHTML = content;
-                infoBox.style.left = `${x}px`;
-                infoBox.style.top = `${y}px`;
-                infoBox.style.display = "block";
-              });
-          }
-
-          else {
-            content = `<span style="color:violet;"><strong>ID :</strong> ${id}</span>`;
-            infoBox.style.borderColor = "violet";
-            infoBox.innerHTML = content;
-            infoBox.style.left = `${x}px`;
-            infoBox.style.top = `${y}px`;
-            infoBox.style.display = "block";
-          }
-
-          clearTimeout(timeout);
-          timeout = setTimeout(() => (infoBox.style.display = "none"), 5000);
-        } catch (err) {
-          console.error("Erreur Firestore :", err);
-        }
-      };
-
       // WebXR
-      const xr = await scene.createDefaultXRExperienceAsync({ floorMeshes: [ground] });
+const xr = await scene.createDefaultXRExperienceAsync({ floorMeshes: [ground] });
 
+// ✅ Sécurité : attendre que XR soit bien actif
+xr.baseExperience.onStateChangedObservable.add((state) => {
+  if (state === BABYLON.WebXRState.IN_XR && xr.pointerSelection) {
+    // ✅ Interaction VR : clic laser
+    xr.pointerSelection.onPointerDownObservable.add((event) => {
+      const picked = event.pickInfo;
+      if (!picked.hit || !picked.pickedMesh) return;
+
+      const rawId = picked.pickedMesh.name;
+      const id = cleanId(rawId);
+
+      db.collection("panneaux_solaire").doc(id).get().then((panneauDoc) => {
+        if (panneauDoc.exists) {
+          const capteurId = panneauDoc.data().capteur_temperature;
+          db.collection("capteurs").doc(capteurId).collection("mesure_capteur")
+            .orderBy("timestamp", "desc").limit(1)
+            .onSnapshot(snapshot => {
+              const data = snapshot.docs[0]?.data();
+              const valeur = data?.valeur ?? "?";
+              alert(`🔆 Panneau : ${id}\n📡 Capteur : ${capteurId}\n🌡 Température : ${valeur} °C`);
+            });
+        } else {
+          db.collection("onduleur").doc(id).get().then((ondoc) => {
+            if (ondoc.exists) {
+              db.collection("onduleur").doc(id).collection("mesures")
+                .orderBy("timestamp", "desc").limit(1)
+                .onSnapshot(snapshot => {
+                  const data = snapshot.docs[0]?.data();
+                  const P = data?.P_DC_inv ?? "?";
+                  const etat = P > 3000 ? "Bon" : P > 1000 ? "Moyen" : "Faible";
+                  alert(`⚙️ Onduleur : ${id}\nÉtat : ${etat}\nPuissance : ${P} W`);
+                });
+            } else {
+              alert(`📍 Objet : ${id}`);
+            }
+          });
+        }
+      }).catch(err => {
+        console.error("Erreur Firebase :", err);
+      });
+    });
+  }
+});
+
+      
       const enterVR = document.createElement("button");
       enterVR.textContent = "Entrer en VR";
       Object.assign(enterVR.style, {
