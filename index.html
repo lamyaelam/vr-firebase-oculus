@@ -22,9 +22,12 @@
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+  <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+
 
   <script>
     const canvas = document.getElementById("renderCanvas");
+    
     const engine = new BABYLON.Engine(canvas, true);
     let scene;
 
@@ -76,6 +79,38 @@
 
       const modelUrl = "https://files.catbox.moe/0g600z.glb";
       await BABYLON.SceneLoader.AppendAsync(modelUrl, "", scene);
+      // === Créer un panneau d'infos flottant en VR ===
+const infoPlane = BABYLON.MeshBuilder.CreatePlane("infoPlane", { width: 3, height: 1.5 }, scene);
+infoPlane.isVisible = false;
+
+const advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateForMesh(infoPlane);
+const infoText = new BABYLON.GUI.TextBlock();
+infoText.color = "white";
+infoText.fontSize = 48;
+infoText.textWrapping = true;
+infoText.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+infoText.textVerticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+advancedTexture.addControl(infoText);
+      let hasLookControl = false;
+
+function showInfo3D(text) {
+  infoText.text = text;
+  infoPlane.isVisible = true;
+
+if (!hasLookControl) {
+  scene.onBeforeRenderObservable.add(() => {
+    const forward = scene.activeCamera.getForwardRay().direction.scale(4);
+    infoPlane.position = scene.activeCamera.position.add(forward);
+    infoPlane.lookAt(scene.activeCamera.position);
+  });
+  hasLookControl = true;
+}
+
+  setTimeout(() => {
+    infoPlane.isVisible = false;
+  }, 10000);
+}
+
 
       const cleanId = (name) => name.replace(/_primitive\d+$/, "").trim();
 
@@ -101,7 +136,8 @@ xr.baseExperience.onStateChangedObservable.add((state) => {
             .onSnapshot(snapshot => {
               const data = snapshot.docs[0]?.data();
               const valeur = data?.valeur ?? "?";
-              alert(`🔆 Panneau : ${id}\n📡 Capteur : ${capteurId}\n🌡 Température : ${valeur} °C`);
+            showInfo3D(`🔆 Panneau : ${id}\n📡 Capteur : ${capteurId}\n🌡 Température : ${valeur} °C`);
+
             });
         } else {
           db.collection("onduleur").doc(id).get().then((ondoc) => {
@@ -112,10 +148,12 @@ xr.baseExperience.onStateChangedObservable.add((state) => {
                   const data = snapshot.docs[0]?.data();
                   const P = data?.P_DC_inv ?? "?";
                   const etat = P > 3000 ? "Bon" : P > 1000 ? "Moyen" : "Faible";
-                  alert(`⚙️ Onduleur : ${id}\nÉtat : ${etat}\nPuissance : ${P} W`);
+                  showInfo3D(`⚙️ Onduleur : ${id}\nÉtat : ${etat}\nPuissance : ${P} W`);
+
                 });
             } else {
-              alert(`📍 Objet : ${id}`);
+            showInfo3D(`📍 Objet : ${id}`);
+
             }
           });
         }
